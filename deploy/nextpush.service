@@ -1,0 +1,26 @@
+# systemd unit for NextPush on Linux. Installed by deploy/install-linux.sh, or copy it to /etc/systemd/system/ yourself.
+# The shared folders must be readable by the "nextpush" user, and WRITABLE if users may delete after copying (mode "pull").
+# If you tighten the sandbox with ProtectSystem=strict, list those folders under ReadWritePaths= in a drop-in (systemctl edit nextpush).
+[Unit]
+Description=NextPush file server (web-managed SFTPGo front end)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=nextpush
+Group=nextpush
+WorkingDirectory=/opt/nextpush
+Environment=NEXTPUSH_DATA_DIR=/var/lib/nextpush
+Environment=PYTHONUNBUFFERED=1
+ExecStart=/usr/bin/python3 -m nextpush
+Restart=on-failure
+RestartSec=5
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectKernelTunables=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+
+[Install]
+WantedBy=multi-user.target

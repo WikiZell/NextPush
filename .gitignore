@@ -1,0 +1,13 @@
+__pycache__/
+*.py[cod]
+.env
+# downloaded third-party binaries and build output: never committed
+tools/sftpgo/
+bin/
+dist/
+build/work/
+*.log
+data/
+.claude/
+.vscode/
+.idea/

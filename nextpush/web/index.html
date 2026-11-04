@@ -1,0 +1,61 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>NextPush</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<div id="boot" class="center muted">Loading...</div>
+
+<section id="screen-setup" class="center" hidden>
+  <div class="card narrow stack">
+    <div class="brand big"><span class="mark">&#8679;</span>NextPush</div>
+    <h1>Welcome</h1>
+    <p class="muted">Let's set up your file server. It takes a minute.</p>
+    <label>Setup code<input id="su-token" autocomplete="off" placeholder="shown on the console where NextPush was started"><small>It is also in the file <span class="mono">setup-code.txt</span> in NextPush's data folder.</small></label>
+    <label>Server name <small>shown to the people you invite</small><input id="su-name" maxlength="60" placeholder="Home server"></label>
+    <label>Public address <small>optional now: what clients will use, for example https://dl.example.com</small><input id="su-url" placeholder="https://dl.example.com"></label>
+    <label>Choose an admin password <small>at least 10 characters</small><input id="su-pass" type="password" autocomplete="new-password"></label>
+    <label>Repeat the password<input id="su-pass2" type="password" autocomplete="new-password"></label>
+    <div id="su-error" class="notice bad" hidden></div>
+    <button class="btn" id="su-go">Finish setup</button>
+  </div>
+</section>
+
+<section id="screen-login" class="center" hidden>
+  <div class="card narrow stack">
+    <div class="brand big"><span class="mark">&#8679;</span>NextPush</div>
+    <label>Admin password<input id="li-pass" type="password" autocomplete="current-password"></label>
+    <div id="li-error" class="notice bad" hidden></div>
+    <button class="btn" id="li-go">Sign in</button>
+  </div>
+</section>
+
+<div id="app" hidden>
+  <header>
+    <div class="brand"><span class="mark">&#8679;</span>NextPush <small id="ver"></small></div>
+    <nav id="nav">
+      <button class="tab active" data-view="users">Users</button>
+      <button class="tab" data-view="activity">Activity</button>
+      <button class="tab" data-view="settings">Settings</button>
+      <button class="tab" data-view="log">Log</button>
+    </nav>
+    <div class="row"><span id="status" class="badge">...</span><button class="btn ghost small" id="logout">Sign out</button></div>
+  </header>
+  <main>
+    <div id="banner"></div>
+    <section id="view-users" class="view"></section>
+    <section id="view-activity" class="view" hidden></section>
+    <section id="view-settings" class="view" hidden></section>
+    <section id="view-log" class="view" hidden></section>
+  </main>
+  <footer class="muted">NextPush is made by Ren&eacute; Girardi and runs <a href="https://github.com/drakkan/sftpgo" target="_blank" rel="noopener">SFTPGo</a> (AGPL-3.0) as a separate program.</footer>
+</div>
+
+<div id="modals"></div>
+<div class="toasts" id="toasts"></div>
+<script src="app.js"></script>
+</body>
+</html>
