@@ -25,8 +25,10 @@ python3 -m nextpush --data-dir /tmp/np --admin-host 127.0.0.1     # run it
 5. **Every admin change needs the session cookie, the CSRF header and a matching `Origin`**; the first administrator needs the one-time setup code; wrong passwords and codes lock the address out.
 6. **Request bodies are always read** (admin and public), or the leftover bytes poison a keep-alive connection (bug found by testing).
 7. **Never `$` in validation regexes**: use `fullmatch` (a trailing newline slipped past `$`).
-8. **SFTPGo stays separate and unmodified.** Do not import or link its code; do not patch the binary. Pin the tested version (`SFTPGO_TESTED_VERSION`, `tools/fetch-sftpgo.*` checksums).
-9. **No personal data in the repository**: use `dl.example.com`, `bob`, `192.168.1.10` in docs and tests. No real hosts, user names, paths or keys.
+8. **Login protection is NextPush's own** (`public.py` + `security.LoginLimiter`): SFTPGo's defender stays off (its ban time escalates compoundingly, to days, when a client keeps retrying). Locks are capped at 10 minutes, only HTTP 401 is
+   counted, locked requests are not forwarded, exempt users are never counted.
+9. **SFTPGo stays separate and unmodified.** Do not import or link its code; do not patch the binary. Pin the tested version (`SFTPGO_TESTED_VERSION`, `tools/fetch-sftpgo.*` checksums).
+10. **No personal data in the repository**: use `dl.example.com`, `bob`, `192.168.1.10` in docs and tests. No real hosts, user names, paths or keys.
 
 ## Conventions
 

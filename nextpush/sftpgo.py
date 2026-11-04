@@ -60,10 +60,10 @@ def find_resources(binary: Path | None) -> Path | None:
 
 
 def build_config(dav_port: int, api_port: int, templates: Path | None = None) -> dict[str, Any]:
-    """The whole SFTPGo configuration NextPush needs: WebDAV under /dav and the REST API on loopback, the defender on, everything else off."""
+    """The whole SFTPGo configuration NextPush needs: WebDAV under /dav and the REST API on loopback, everything else off. NextPush does the login protection itself."""
     loopback = ["127.0.0.1", "::1"]
     return {
-        "common": {"idle_timeout": 15, "defender": {"enabled": True}},
+        "common": {"idle_timeout": 15, "defender": {"enabled": False}},   # NextPush protects the logins itself (see public.py); SFTPGo's own defender escalates bans to days
         "sftpd": {"bindings": []},
         "ftpd": {"bindings": []},
         "webdavd": {"bindings": [{"port": dav_port, "address": "127.0.0.1", "enable_https": False, "prefix": DAV_PREFIX, "proxy_allowed": loopback,

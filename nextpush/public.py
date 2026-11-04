@@ -7,11 +7,13 @@
 """
 from __future__ import annotations
 
+import base64
 import http.client
 import json
 import logging
 import socket
 import sys
+import time
 import urllib.parse
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import TYPE_CHECKING
@@ -29,6 +31,16 @@ HOP_BY_HOP = {"connection", "keep-alive", "proxy-authenticate", "proxy-authoriza
 STRIP_REQUEST = HOP_BY_HOP | {"host", "x-forwarded-for", "x-real-ip", "forwarded", "x-forwarded-host"}
 CHUNK = 256 * 1024
 MAX_BODY = 1_000_000
+
+
+def basic_username(header: str | None) -> str | None:
+    """The user name inside a Basic Authorization header, or None when there is no (readable) login."""
+    if not header or not header.lower().startswith("basic "):
+        return None
+    try:
+        return base64.b64decode(header[6:].strip(), validate=True).decode("utf-8").split(":", 1)[0]
+    except (ValueError, UnicodeDecodeError):
+        return None
 
 
 class PublicServer(ThreadingHTTPServer):
@@ -74,6 +86,24 @@ def make_handler(app: "App") -> type[BaseHTTPRequestHandler]:
                 self.close_connection = True
                 return False
             return True
+
+        def _note_locked(self, ip: str, wait: int) -> None:
+            now = time.monotonic()
+            if now - app.last_refusal_log.get("locked:" + ip, -1e9) >= 60:
+                app.last_refusal_log["locked:" + ip] = now
+                log.warning("address %s is locked out for %s more seconds after too many wrong passwords (Activity -> Blocked addresses to lift it)", ip, wait)
+
+        def _note_refusal(self, status: int) -> None:
+            """A refused login used to be invisible (SFTPGo logs at info level). One line per address per minute, so a scan cannot fill the log."""
+            if "Authorization" not in self.headers or not (status == 401 or (status == 403 and self.command in ("PROPFIND", "GET", "HEAD", "OPTIONS"))):
+                return
+            ip, now = self._ip(), time.monotonic()
+            if now - app.last_refusal_log.get(ip, -1e9) < 60:
+                return
+            if len(app.last_refusal_log) > 2000:
+                app.last_refusal_log.clear()
+            app.last_refusal_log[ip] = now
+            log.warning("login refused (HTTP %s) for %s from %s", status, self.command, ip)
 
         def _ip(self) -> str:
             return client_ip(self.client_address[0], self.headers.get("X-Forwarded-For"), app.settings.get("trusted_proxies"))
@@ -121,6 +151,21 @@ def make_handler(app: "App") -> type[BaseHTTPRequestHandler]:
 
         def _proxy(self, body: bytes) -> None:
             body = body or None
+            username = basic_username(self.headers.get("Authorization"))
+            tracked = username is not None and username not in app.settings.get("no_block_users")   # a request with a login, from a user that is not exempt
+            ip = self._ip()
+            if tracked:
+                wait = app.dav_limiter.locked_for(ip)
+                if wait:
+                    self._note_locked(ip, wait)
+                    self.send_response(429)
+                    payload = json.dumps({"error": f"Too many wrong passwords from this address. Try again in {wait} seconds."}).encode()
+                    for name, value in (("Content-Type", "application/json"), ("Content-Length", str(len(payload))), ("Retry-After", str(wait)), ("Connection", "close")):
+                        self.send_header(name, value)
+                    self.end_headers()
+                    self.wfile.write(payload)
+                    self.close_connection = True
+                    return
             headers = {k: v for k, v in self.headers.items() if k.lower() not in STRIP_REQUEST and k.lower() != app.settings.get("access_key")["header"].lower()}
             headers["Host"] = f"127.0.0.1:{app.settings.get('dav_port')}"
             headers["X-Forwarded-For"] = self._ip()
@@ -131,6 +176,12 @@ def make_handler(app: "App") -> type[BaseHTTPRequestHandler]:
                     response = upstream.getresponse()
                 except OSError:
                     return self._json(502, {"error": "the file service is not available"}, close=True)
+                self._note_refusal(response.status)
+                if tracked:
+                    if response.status == 401:
+                        app.dav_limiter.failure(ip)
+                    elif response.status < 400:
+                        app.dav_limiter.success(ip)
                 self.send_response(response.status)
                 for name, value in response.getheaders():
                     if name.lower() not in HOP_BY_HOP and name.lower() not in ("server", "date", "content-length"):

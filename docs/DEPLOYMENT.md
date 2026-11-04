@@ -31,6 +31,31 @@ Point it to **port 8096** (plain http) on the NextPush computer and turn on HTTP
   so that logins are attributed to the real client address.
 - Use a hard-to-guess hostname with a wildcard certificate, so certificate transparency logs do not publish the exact name, and a DNS-only record if no CDN should see the traffic in clear.
 - Do **not** publish port 8095.
+- Recommended in the proxy host's *Advanced / custom Nginx configuration*, so that very large downloads are streamed instead of being buffered to disk, and nothing is ever uploaded:
+
+  ```nginx
+  proxy_buffering off;
+  proxy_request_buffering off;
+  proxy_read_timeout 3600s;
+  proxy_send_timeout 3600s;
+  client_max_body_size 1m;
+  ```
+
+- **What a stranger sees.** NextPush closes the connection without a byte when the access key is missing or wrong, and nginx-based proxies turn that into their own **`502 Bad Gateway`** page. That is what a dead
+  backend looks like, it reveals nothing about NextPush or SFTPGo, and no data is reachable. (A proxy that never answers at all would need extra nginx rules; this was not needed and is not tested.)
+  The proxy may add its own headers (Nginx Proxy Manager adds `X-Served-By: <your hostname>` and HSTS); that is expected.
+- After the first user is created, open NextPull and press **Test** on the connection: it shows the TLS version and that the certificate was verified.
+
+## Running as the same user as another program (example: a downloader's folder)
+
+If the shared folders are written by another program, run NextPush as **that program's user**, so that deleting after a copy always works. On systemd, change `User=` / `Group=` in the unit; if that user has no name, create one with
+the numeric uid (`useradd --system --uid 1101 --gid 100 --home-dir /var/lib/nextpush --shell /usr/sbin/nologin nextpush`). To keep both ports off other network interfaces, bind them to the LAN address:
+
+```
+ExecStart=/usr/bin/python3 -m nextpush --admin-host 192.168.1.10 --public-host 192.168.1.10
+```
+
+This exact setup (native, systemd, SFTPGo copied from an existing SFTPGo container, the two ports bound to the LAN address, a reverse proxy with Let's Encrypt in front) was installed and tested on a Raspberry Pi: see [TESTING.md](TESTING.md).
 
 ## Backups and moving
 
@@ -44,4 +69,5 @@ Stop NextPush and copy the data folder (`nextpush.json`, `sftpgo/`). The access 
 | Clients get "Cannot reach the server" | the proxy does not point to 8096, or the access key in their invite is old (rotated) |
 | A user can log in but sees no files | the `nextpush` / SYSTEM account cannot read the folder |
 | Deleting fails (403) for a `pull` user | the account running NextPush cannot write to the folder |
+| A user is "rejected" from outside but fine at home | the address was locked out after wrong passwords (a client may be retrying an old password). *Activity -> Blocked addresses -> Unblock*, make sure the client has the right password, or tick "Never lock this user's address out" for that user. Locks last at most 10 minutes. (Before 0.1.1, SFTPGo's own defender could ban for days.) |
 | Lost the admin password | stop NextPush, set `"admin_hash": ""` in `nextpush.json`, start it: a new setup code is printed (users are kept) |

@@ -57,6 +57,8 @@ class App:
         self.limiter = LoginLimiter()
         self.supervisor = sftpgo.Supervisor(self.settings, self.data_dir, binary)
         self.public_dropped = 0
+        self.last_refusal_log: dict[str, float] = {}
+        self.dav_limiter = LoginLimiter(free_attempts=8, max_lock=600)   # wrong passwords on the public port: 8 free tries, then 2 s, 4 s, ... at most 10 minutes
         self.sftpgo_error = ""
         self.log_lines: collections.deque[str] = collections.deque(maxlen=500)
         self._redact = _Redact()

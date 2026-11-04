@@ -23,6 +23,13 @@ The unit and API tests need nothing else. The **integration** tests run the **re
 - The packaged Windows program (`build\build.ps1`): it finds its own `bin\sftpgo.exe`, serves the GUI, creates a user and serves a download.
 - `tools/fetch-sftpgo.ps1` accepts the right archive and refuses a modified one.
 
+## Also verified on real infrastructure (manual, before the first release)
+
+- **Linux, arm64 (Raspberry Pi, Python 3.11):** the whole suite (117 tests) passes, including the symbolic-link escape tests and the Linux system-folder rules that are skipped on Windows. About 270 MB/s through the proxy.
+- **The complete public chain** (HTTPS with a Let's Encrypt certificate -> Nginx Proxy Manager -> NextPush on the Pi -> SFTPGo -> a staging folder), driven from another computer with the real NextPull and rclone:
+  discovery and listing, a byte-exact download checked with SHA-256, Range, a 300 MB file (about 60 MB/s over the home network), delete after copy, uploads refused and creating nothing, a wrong password (401), strangers getting only the proxy's
+  `502`, the admin API not reachable from outside, NextPull's TLS evidence (TLS 1.3, verified certificate), a real rclone Copy and Move (the shared folder survives), and no secret in NextPull's logs. The access key was rotated afterwards.
+
 ## Not covered by automated tests
 
 `deploy/install-linux.sh`, `deploy/nextpush.service`, `deploy/install-windows.ps1` and the `Dockerfile` are provided as templates; they were reviewed but not exercised in the test environment.

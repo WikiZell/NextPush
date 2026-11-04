@@ -11,6 +11,7 @@ import helpers
 from helpers import FakeUpstream, TempCase, dav_request
 from nextpush import public
 from nextpush.config import Settings
+from nextpush.security import LoginLimiter
 
 KEY = ("X-Pull-Key", "k3y-for-the-tests-0123456789")
 
@@ -20,6 +21,8 @@ class StubApp:
         self.settings = Settings(None)
         self.settings.update(dav_port=dav_port, server_name="Test server", access_key={"enabled": key_enabled, "header": KEY[0], "value": KEY[1]})
         self.public_dropped = 0
+        self.last_refusal_log: dict[str, float] = {}
+        self.dav_limiter = LoginLimiter(free_attempts=8, max_lock=600)
 
 
 class ProxyCase(TempCase):
@@ -217,6 +220,85 @@ class Proxying(ProxyCase):
         self.upstream.routes[("GET", "/dav/Ranma%20%C2%BD/ep.mkv")] = (200, {}, b"x")
         self.call("GET", "/dav/Ranma%20%C2%BD/ep.mkv?x=1")
         self.assertEqual(self.upstream.requests[0]["path"], "/dav/Ranma%20%C2%BD/ep.mkv?x=1")
+
+
+class RefusalLog(ProxyCase):
+    def test_a_refused_login_is_logged_once_a_minute_per_address_without_secrets(self) -> None:
+        self.upstream.routes[("PROPFIND", "/dav/")] = (401, {}, b"no")
+        with self.assertLogs("nextpush.public", level="WARNING") as captured:
+            for _ in range(5):
+                self.call("PROPFIND", "/dav/", user="bob", password="very-secret-password")
+        self.assertEqual(len(captured.output), 1, "one line per address per minute")
+        self.assertIn("login refused (HTTP 401)", captured.output[0])
+        self.assertNotIn("very-secret-password", captured.output[0])
+        self.assertNotIn(KEY[1], captured.output[0])
+
+    def test_a_403_on_a_listing_is_logged_but_not_on_a_delete(self) -> None:
+        self.upstream.routes[("PROPFIND", "/dav/")] = (403, {}, b"x")
+        self.upstream.routes[("DELETE", "/dav/f")] = (403, {}, b"x")
+        with self.assertLogs("nextpush.public", level="WARNING") as captured:
+            self.call("PROPFIND", "/dav/", user="bob", password="x")
+        self.assertIn("login refused (HTTP 403)", captured.output[0])
+        self.app.last_refusal_log.clear()
+        with self.assertNoLogs("nextpush.public", level="WARNING"):
+            self.call("DELETE", "/dav/f", user="bob", password="x")
+
+    def test_requests_without_a_login_and_good_answers_are_not_logged(self) -> None:
+        self.upstream.routes[("PROPFIND", "/dav/")] = (401, {}, b"no")
+        self.upstream.routes[("GET", "/dav/ok")] = (200, {}, b"fine")
+        with self.assertNoLogs("nextpush.public", level="WARNING"):
+            self.call("PROPFIND", "/dav/")                       # no Authorization header at all
+            self.call("GET", "/dav/ok", user="bob", password="x")  # accepted
+
+
+class LoginProtection(ProxyCase):
+    """Wrong passwords are counted per REAL address; after 8, that address gets a clear 429 and SFTPGo is not contacted until the lock ends."""
+
+    def setUp(self) -> None:
+        super().setUp()
+        self.upstream.routes[("PROPFIND", "/dav/")] = (401, {}, b"bad login")
+        self.upstream.routes[("GET", "/dav/ok")] = (200, {}, b"fine")
+
+    def guess(self, ip: str, user: str = "bob", password: str = "wrong") -> int:
+        return self.call("PROPFIND", "/dav/", user=user, password=password, headers={"X-Forwarded-For": ip})[0]
+
+    def test_eight_wrong_passwords_then_a_clear_429_that_spares_the_upstream(self) -> None:
+        self.assertEqual([self.guess("203.0.113.5") for _ in range(8)], [401] * 8)
+        before = len(self.upstream.requests)
+        status, headers, body = self.call("PROPFIND", "/dav/", user="bob", password="wrong", headers={"X-Forwarded-For": "203.0.113.5"})
+        self.assertEqual(status, 429)
+        self.assertIn("Too many wrong passwords", body.decode())
+        self.assertGreaterEqual(int(headers["Retry-After"]), 1)
+        self.assertEqual(len(self.upstream.requests), before, "SFTPGo is not contacted while the address is locked")
+        self.assertEqual(self.call("GET", "/dav/ok", user="bob", password="right", headers={"X-Forwarded-For": "203.0.113.5"})[0], 429, "even a correct login waits")
+
+    def test_other_addresses_and_requests_without_a_login_are_not_affected(self) -> None:
+        [self.guess("203.0.113.5") for _ in range(9)]
+        self.assertEqual(self.guess("203.0.113.6"), 401)
+        self.assertEqual(self.call("GET", "/.well-known/nextpush", headers={"X-Forwarded-For": "203.0.113.5"})[0], 200, "discovery needs no login")
+        self.assertEqual(self.call("PROPFIND", "/dav/", headers={"X-Forwarded-For": "203.0.113.5"})[0], 401, "no Authorization header: just the challenge")
+
+    def test_a_good_login_resets_the_count(self) -> None:
+        [self.guess("203.0.113.7") for _ in range(7)]
+        self.assertEqual(self.call("GET", "/dav/ok", user="bob", password="right", headers={"X-Forwarded-For": "203.0.113.7"})[0], 200)
+        self.assertEqual([self.guess("203.0.113.7") for _ in range(7)], [401] * 7, "the count started again")
+
+    def test_an_exempt_user_is_never_locked_out_and_never_counted(self) -> None:
+        self.app.settings.update(no_block_users=["kim"])
+        self.assertEqual([self.guess("203.0.113.8", user="kim") for _ in range(40)], [401] * 40)
+        self.assertEqual(self.guess("203.0.113.8", user="bob"), 401, "the address is not penalised for the exempt user's failures")
+
+    def test_the_lock_ends_and_the_address_can_be_unlocked_by_the_administrator(self) -> None:
+        [self.guess("203.0.113.9") for _ in range(8)]
+        self.assertEqual(self.guess("203.0.113.9"), 429)
+        self.assertEqual([ip for ip, _ in self.app.dav_limiter.snapshot()], ["203.0.113.9"])
+        self.app.dav_limiter.success("203.0.113.9")
+        self.assertEqual(self.guess("203.0.113.9"), 401)
+
+    def test_junk_authorization_headers_do_not_crash_it(self) -> None:
+        for value in ("Basic", "Basic !!!", "Bearer abc", "Basic " + "A" * 5000, ""):
+            status = self.call("PROPFIND", "/dav/", headers={"Authorization": value})[0]
+            self.assertIn(status, (401, 429), value[:20])
 
 
 class WithoutKey(ProxyCase):

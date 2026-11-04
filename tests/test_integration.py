@@ -88,7 +88,7 @@ class Setup(Stack):
         self.assertEqual([b["address"] for b in config["webdavd"]["bindings"]], ["127.0.0.1"])
         http_binding = config["httpd"]["bindings"][0]
         self.assertEqual((http_binding["address"], http_binding["enable_web_admin"], http_binding["enable_web_client"]), ("127.0.0.1", False, False))
-        self.assertTrue(config["common"]["defender"]["enabled"])
+        self.assertFalse(config["common"]["defender"]["enabled"], "NextPush does the login protection itself")
         status = self.admin.get("/api/state")[1]["sftpgo"]
         self.assertTrue(status["running"] and status["healthy"])
 
@@ -437,27 +437,77 @@ class Persistence(TempCase):
 
 
 class BruteForce(TempCase):
-    def test_the_defender_blocks_an_address_that_keeps_guessing(self) -> None:
+    """NextPush's own login protection against the real stack. Guessing clients are told apart by their REAL address (the proxy header); the tests use documentation
+    addresses instead of 127.0.0.1, which is also the address NextPush itself uses to talk to SFTPGo."""
+    GUESSER = {"X-Forwarded-For": "203.0.113.50"}
+    OTHER = {"X-Forwarded-For": "203.0.113.77"}
+
+    def setUp(self) -> None:
+        super().setUp()
         share = self.tmp / "m"
         (share / "A").mkdir(parents=True)
-        app = App(self.tmp / "data", binary=BINARY, admin_port=0, public_port=0, admin_host="127.0.0.1", public_host="127.0.0.1", quiet=True)
-        app.start()
-        self.addCleanup(app.stop)
+        self.app = App(self.tmp / "data", binary=BINARY, admin_port=0, public_port=0, admin_host="127.0.0.1", public_host="127.0.0.1", quiet=True)
+        self.app.start()
+        self.addCleanup(self.app.stop)
         import nextpush.admin as admin_module
         import nextpush.security as security
         original = admin_module.hash_password
         admin_module.hash_password = lambda password: security.hash_password(password, 1000)
         self.addCleanup(setattr, admin_module, "hash_password", original)
-        admin = Client(app.admin_address[1])
-        admin.csrf = admin.post("/api/setup", {"token": app.setup_token(), "password": PASSWORD})[1]["csrf"]
-        pw = admin.post("/api/users", {"username": "lea", "folders": [{"path": str(share / "A")}]})[1]["password"]
-        key = app.settings.get("access_key")
-        pair = (key["header"], key["value"])
-        self.assertEqual(dav_request(app.public_address[1], "PROPFIND", "/dav/", user="lea", password=pw, key=pair)[0], 207)
-        statuses = [dav_request(app.public_address[1], "PROPFIND", "/dav/", user="lea", password="wrong-%d" % i, key=pair)[0] for i in range(20)]
-        self.assertEqual(statuses[0], 401)
-        self.assertIn(statuses[-1], (403, 429), f"after many wrong passwords the address is blocked: {statuses}")
-        self.assertIn(dav_request(app.public_address[1], "PROPFIND", "/dav/", user="lea", password=pw, key=pair)[0], (403, 429), "even the right password is refused while banned")
+        self.admin = Client(self.app.admin_address[1])
+        self.admin.csrf = self.admin.post("/api/setup", {"token": self.app.setup_token(), "password": PASSWORD})[1]["csrf"]
+        self.pw = self.admin.post("/api/users", {"username": "lea", "folders": [{"path": str(share / "A")}]})[1]["password"]
+        self.kim_pw = self.admin.post("/api/users", {"username": "kim", "folders": [{"path": str(share / "A")}], "no_block": True})[1]["password"]
+        key = self.app.settings.get("access_key")
+        self.pair = (key["header"], key["value"])
+        self.port = self.app.public_address[1]
+
+    def dav(self, password: str, headers=None, user: str = "lea") -> int:
+        return dav_request(self.port, "PROPFIND", "/dav/", user=user, password=password, key=self.pair, headers=headers)[0]
+
+    def test_sftpgos_own_defender_is_off_because_it_escalates_bans_to_days(self) -> None:
+        from nextpush.sftpgo import build_config
+        self.assertFalse(build_config(1, 2)["common"]["defender"]["enabled"])
+
+    def test_a_guessing_address_is_locked_listed_and_can_be_unlocked(self) -> None:
+        self.assertEqual(self.dav(self.pw, self.GUESSER), 207)
+        statuses = [self.dav("wrong-%d" % i, self.GUESSER) for i in range(8)]
+        self.assertEqual(statuses, [401] * 8)
+        self.assertEqual(self.dav(self.pw, self.GUESSER), 429, "even the right password waits while the address is locked")
+        self.assertEqual(self.dav(self.pw, self.OTHER), 207, "another address is not affected")
+        status, body, _ = self.admin.get("/api/blocked")
+        self.assertEqual((status, [b["ip"] for b in body["blocked"]]), (200, ["203.0.113.50"]))
+        self.assertLessEqual(body["blocked"][0]["seconds"], 600)
+        for i in range(100):   # a client that keeps trying while locked cannot make the lock longer: those attempts are not even forwarded
+            self.dav("again-%d" % i, self.GUESSER)
+        self.assertLessEqual(self.admin.get("/api/blocked")[1]["blocked"][0]["seconds"], 600, "the lock is capped at ten minutes, never days")
+        self.assertEqual(self.admin.delete("/api/blocked/203.0.113.50")[0], 200)
+        self.assertEqual(self.admin.get("/api/blocked")[1]["blocked"], [])
+        self.assertEqual(self.dav(self.pw, self.GUESSER), 207, "after unblocking the right password works at once")
+
+    def test_an_exempt_user_is_never_locked_out_and_the_flag_can_be_changed(self) -> None:
+        users = {u["username"]: u for u in self.admin.get("/api/users")[1]["users"]}
+        self.assertEqual((users["kim"]["no_block"], users["lea"]["no_block"]), (True, False))
+        self.assertEqual([self.dav("wrong-%d" % i, self.GUESSER, user="kim") for i in range(30)], [401] * 30)
+        self.assertEqual(self.dav(self.kim_pw, self.GUESSER, user="kim"), 207, "still fine after thirty wrong passwords")
+        self.assertEqual(self.admin.get("/api/blocked")[1]["blocked"], [])
+        self.assertEqual(self.admin.put("/api/users/kim", {"no_block": False})[1]["user"]["no_block"], False)
+        [self.dav("wrong-%d" % i, self.GUESSER, user="kim") for i in range(8)]
+        self.assertEqual(self.dav(self.kim_pw, self.GUESSER, user="kim"), 429, "no longer exempt")
+        self.assertEqual(self.admin.put("/api/users/kim", {"no_block": True})[1]["user"]["no_block"], True)
+        self.assertEqual(self.dav(self.kim_pw, self.GUESSER, user="kim"), 207, "exempt again: the lock does not apply to this user")
+        self.admin.delete("/api/users/kim")
+        self.assertNotIn("kim", self.app.settings.get("no_block_users"), "deleting a user forgets the exemption")
+
+    def test_the_log_says_why_a_login_was_refused_and_locked(self) -> None:
+        for i in range(9):
+            self.dav("wrong-password", self.GUESSER)
+        text = "\n".join(self.app.log_lines)
+        self.assertIn("login refused (HTTP 401)", text)
+        self.assertIn("locked out for", text)
+        self.assertIn("203.0.113.50", text)
+        self.assertNotIn(self.pw, text)
+        self.assertNotIn("wrong-password", text)
 
 
 if __name__ == "__main__":

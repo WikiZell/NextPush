@@ -57,6 +57,7 @@ DEFAULTS: dict[str, Any] = {
     "public_host": "0.0.0.0",
     "public_port": 8096,                  # discovery + WebDAV. This is the only port a reverse proxy should point to
     "access_key": {"enabled": True, "header": ACCESS_KEY_HEADER, "value": ""},
+    "no_block_users": [],                 # users whose address is never locked out after wrong passwords
     "trusted_proxies": ["127.0.0.0/8", "::1/128", "10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "fc00::/7"],
     "dav_port": 0,                        # SFTPGo's WebDAV and API ports (loopback only), chosen on first start and then kept
     "api_port": 0,

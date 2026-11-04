@@ -122,7 +122,9 @@ class LoginLimiter:
     FREE_ATTEMPTS = 5
     MAX_LOCK = 15 * 60
 
-    def __init__(self, clock=time.time) -> None:
+    def __init__(self, clock=time.time, free_attempts: int | None = None, max_lock: int | None = None) -> None:
+        self.FREE_ATTEMPTS = free_attempts if free_attempts is not None else type(self).FREE_ATTEMPTS
+        self.MAX_LOCK = max_lock if max_lock is not None else type(self).MAX_LOCK
         self._clock = clock
         self._lock = threading.Lock()
         self._state: dict[str, tuple[int, float]] = {}   # ip -> (failures, locked_until)
@@ -145,6 +147,12 @@ class LoginLimiter:
     def success(self, ip: str) -> None:
         with self._lock:
             self._state.pop(ip, None)
+
+    def snapshot(self) -> list[tuple[str, int]]:
+        """Addresses that are locked out right now, with the seconds left."""
+        now = self._clock()
+        with self._lock:
+            return sorted((ip, int(until - now + 0.999)) for ip, (_, until) in self._state.items() if until > now)
 
 
 # ---------------------------------------------------------------------------------------------- client address

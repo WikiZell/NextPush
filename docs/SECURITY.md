@@ -5,7 +5,7 @@
 | Threat | Protection | Tested in |
 | --- | --- | --- |
 | A stranger finds the server | The public port answers **nothing** (connection closed) without the access key; wrong methods also get nothing; unknown paths are a bare 404 | `test_public_proxy.Gate`, `Discovery` |
-| Someone guesses a user password | SFTPGo's defender bans the address after a few failures; passwords are 32 random characters by default | `test_integration.BruteForce` |
+| Someone guesses a user password | NextPush counts wrong passwords (HTTP 401) per real client address: after 8, that address is answered `429` for 2 s, 4 s, 8 s... **at most 10 minutes**, without contacting SFTPGo; passwords are 32 random characters by default. An administrator can unblock an address (Activity page) and exempt users | `test_integration.BruteForce`, `test_public_proxy.LoginProtection` |
 | Someone guesses the admin password | PBKDF2-HMAC-SHA256 (600 000 rounds), 10+ characters, per-address lock-out growing to 15 minutes, session cookie HttpOnly + SameSite=Strict (+ Secure behind https) | `test_admin_api` |
 | A web page makes the admin's browser act | CSRF header on every change, `Origin` check, strict Content-Security-Policy, no inline scripts, `X-Frame-Options: DENY` | `test_admin_api.SessionsAndCsrf`, `StaticFiles` |
 | First-run takeover | The first administrator needs the **setup code** (console / private file); wrong codes lock the address out; the code is single-use | `test_admin_api.SetupFlow` |
@@ -16,6 +16,11 @@
 | Secrets in logs | the access key and the private SFTPGo password are redacted by a log filter; SFTPGo runs at log level `info`; the key header is not forwarded to SFTPGo | `test_admin_api.Hygiene` |
 | SFTPGo's own interfaces | only the REST API (loopback) and WebDAV (loopback) are on; its web admin and web client are off | `test_integration.Setup` |
 | Internal errors leaking details | the API returns a generic message, the log has the traceback | `test_admin_api.Hygiene` |
+
+## What a stranger sees through a reverse proxy
+
+Without the access key the connection is closed by NextPush; an nginx-based proxy shows its own `502 Bad Gateway` page. Nothing about NextPush or SFTPGo appears in it, and the admin interface and API are not
+reachable through the public port at all (tested through a real Nginx Proxy Manager with HTTPS).
 
 ## What is NOT protected (know this)
 

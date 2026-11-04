@@ -137,7 +137,7 @@ async function loadUsers() {
   S.users = r.users;
   box.innerHTML = `<div class="row between"><div><h1>Users</h1><p class="muted">Each user signs in with NextPull and sees only the folders you share with them.</p></div><button class="btn" id="u-add">+ Add user</button></div>
     <div class="card">${r.users.length ? `<table><thead><tr><th>User</th><th>Shared folders</th><th>Last sign-in</th><th></th></tr></thead><tbody>${r.users.map(u => `
-      <tr><td><b>${esc(u.username)}</b> ${u.enabled ? "" : '<span class="badge warn">disabled</span>'}${u.expires ? ` <span class="badge">until ${esc(u.expires)}</span>` : ""}</td>
+      <tr><td><b>${esc(u.username)}</b> ${u.enabled ? "" : '<span class="badge warn">disabled</span>'}${u.expires ? ` <span class="badge">until ${esc(u.expires)}</span>` : ""}${u.no_block ? ' <span class="badge info" title="never locked out after wrong passwords">no lock-out</span>' : ""}</td>
       <td>${u.folders.map(f => `<span class="badge ${f.mode === "pull" ? "info" : ""}" title="${esc(f.mode_label)}">${esc(f.name)}</span>`).join(" ")}</td><td class="muted">${esc(fmtDate(u.last_login))}</td>
       <td style="text-align:right"><button class="btn ghost small" data-invite="${esc(u.username)}">Invite</button> <button class="btn ghost small" data-edit="${esc(u.username)}">Edit</button></td></tr>`).join("")}</tbody></table>`
       : '<div class="empty">No users yet. Click <b>Add user</b> to create the first one.</div>'}</div>`;
@@ -171,6 +171,7 @@ function openUserEditor(user) {
         <label>Download speed limit (KB/s)<input id="ue-speed" type="number" min="0" value="${esc(user.download_kbps)}"><small>0 = unlimited</small></label>
         <label>Access ends on<input id="ue-expires" type="date" value="${esc(user.expires)}"><small>empty = never</small></label></div></details>
       ${isNew ? "" : `<label class="row" style="flex-direction:row;gap:8px"><input id="ue-enabled" type="checkbox" ${user.enabled ? "checked" : ""}><span>Account enabled</span></label>`}
+      <label class="row" style="flex-direction:row;gap:8px"><input id="ue-noblock" type="checkbox" ${user.no_block ? "checked" : ""}><span>Never lock this user's address out <small>(for someone whose saved password may be wrong for a while; wrong passwords from them are never counted)</small></span></label>
       <div class="row between"><div class="row"><button class="btn" id="ue-save">${isNew ? "Create user" : "Save changes"}</button><button class="btn ghost" data-close>Cancel</button></div>
         ${isNew ? "" : '<div class="row"><button class="btn ghost small" id="ue-reset">Reset password</button><button class="btn danger small" id="ue-delete">Delete user</button></div>'}</div>
     </div>`);
@@ -186,11 +187,11 @@ function openUserEditor(user) {
   o.querySelector("#ue-save").addEventListener("click", async () => {
     const button = o.querySelector("#ue-save"); button.disabled = true;
     if (isNew) {
-      const r = await call("POST", "/api/users", {username: $("ue-name").value, password: $("ue-pass").value, folders: collect(), ...limits()});
+      const r = await call("POST", "/api/users", {username: $("ue-name").value, password: $("ue-pass").value, folders: collect(), no_block: $("ue-noblock").checked, ...limits()});
       button.disabled = false;
       if (r.ok) { o.remove(); showCreated(r.user.username, r.password); loadUsers(); }
     } else {
-      const r = await call("PUT", `/api/users/${encodeURIComponent(user.username)}`, {folders: collect(), enabled: $("ue-enabled").checked, ...limits()});
+      const r = await call("PUT", `/api/users/${encodeURIComponent(user.username)}`, {folders: collect(), enabled: $("ue-enabled").checked, no_block: $("ue-noblock").checked, ...limits()});
       button.disabled = false;
       if (r.ok) { o.remove(); toast("Saved. The user was disconnected so the change applies at once.", "ok"); loadUsers(); }
     }
@@ -245,10 +246,13 @@ function pickFolder(start, onPick) {
 
 // ------------------------------------------------------------------------------------------------ activity
 async function loadActivity() {
-  const r = await api("GET", "/api/activity");
+  const [r, blocked] = await Promise.all([api("GET", "/api/activity"), api("GET", "/api/blocked")]);
   const box = $("view-activity");
   box.innerHTML = `<div><h1>Activity</h1><p class="muted">Who is connected right now. Refreshes every few seconds.</p></div><div class="card">${
-    !r.ok ? `<div class="notice bad">${esc(r.error)}</div>` : r.connections.length ? `<table><thead><tr><th>User</th><th>From</th><th>Since</th><th>Doing</th></tr></thead><tbody>${r.connections.map(c => `<tr><td><b>${esc(c.username)}</b></td><td class="mono">${esc(c.address)}</td><td class="muted">${esc(fmtDate(c.since))}</td><td class="muted">${esc(c.command)}</td></tr>`).join("")}</tbody></table>` : '<div class="empty">Nobody is connected.</div>'}</div>`;
+    !r.ok ? `<div class="notice bad">${esc(r.error)}</div>` : r.connections.length ? `<table><thead><tr><th>User</th><th>From</th><th>Since</th><th>Doing</th></tr></thead><tbody>${r.connections.map(c => `<tr><td><b>${esc(c.username)}</b></td><td class="mono">${esc(c.address)}</td><td class="muted">${esc(fmtDate(c.since))}</td><td class="muted">${esc(c.command)}</td></tr>`).join("")}</tbody></table>` : '<div class="empty">Nobody is connected.</div>'}</div>
+    <div class="card stack"><h2>Blocked addresses</h2><p class="muted">After 8 wrong passwords from one address, NextPush locks that address out for a short time (seconds, growing to at most 10 minutes). If someone is locked out (for example their saved password was wrong for a while), unblock them here. You can exempt a user in their settings.</p>${
+    !blocked.ok ? `<div class="notice bad">${esc(blocked.error)}</div>` : blocked.blocked.length ? `<table><tbody>${blocked.blocked.map(b => `<tr><td class="mono">${esc(b.ip)}</td><td class="muted">locked for ${b.seconds >= 60 ? Math.ceil(b.seconds / 60) + " more minute(s)" : b.seconds + " more second(s)"}</td><td style="text-align:right"><button class="btn ghost small" data-unblock="${esc(b.ip)}">Unblock</button></td></tr>`).join("")}</tbody></table>` : '<div class="empty">No address is blocked.</div>'}</div>`;
+  box.querySelectorAll("[data-unblock]").forEach(b => b.addEventListener("click", async () => { const x = await call("DELETE", `/api/blocked/${encodeURIComponent(b.dataset.unblock)}`); if (x.ok) { toast("Unblocked", "ok"); loadActivity(); } }));
 }
 
 // ------------------------------------------------------------------------------------------------ settings

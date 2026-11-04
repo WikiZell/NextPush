@@ -276,29 +276,43 @@ def make_handler(app: "App") -> type[BaseHTTPRequestHandler]:
             new = app.sessions.create(self._ip())
             return 200, {"ok": True, "csrf": new.csrf}, self._set_cookie(new.token, 12 * 3600)
 
+        def _flag(self, user: dict) -> dict:
+            return {**user, "no_block": user["username"] in app.settings.get("no_block_users")}
+
+        def _set_no_block(self, name: str, flag: bool) -> None:
+            current = [u for u in app.settings.get("no_block_users") if u != name]
+            app.settings.update(no_block_users=sorted(current + [name]) if flag else current)
+
         def api_users(self):
             self._require_admin(False)
-            return {"users": app.users().list()}
+            return {"users": [self._flag(u) for u in app.users().list()]}
 
         def api_user_create(self):
             self._require_admin(True)
-            user, password = app.users().create(self._body())
+            spec = self._body()
+            user, password = app.users().create(spec)
+            if spec.get("no_block"):
+                self._set_no_block(user["username"], True)
             log.info("user created: %s", user["username"])
-            return 201, {"user": user, "password": password}, {}
+            return 201, {"user": self._flag(user), "password": password}, {}
 
         def api_user_get(self, name):
             self._require_admin(False)
-            return {"user": app.users().get(name)}
+            return {"user": self._flag(app.users().get(name))}
 
         def api_user_update(self, name):
             self._require_admin(True)
-            user = app.users().update(name, self._body())
+            spec = self._body()
+            user = app.users().update(name, spec)
+            if "no_block" in spec:
+                self._set_no_block(name, bool(spec["no_block"]))
             log.info("user updated: %s", name)
-            return {"user": user}
+            return {"user": self._flag(user)}
 
         def api_user_delete(self, name):
             self._require_admin(True)
             app.users().delete(name)
+            self._set_no_block(name, False)
             log.info("user deleted: %s", name)
             return {"ok": True}
 
@@ -323,6 +337,21 @@ def make_handler(app: "App") -> type[BaseHTTPRequestHandler]:
                 rows.append({"username": item.get("username", ""), "protocol": item.get("protocol", ""), "address": item.get("remote_address", ""), "since": item.get("connection_time", 0),
                              "command": item.get("command", "")})
             return {"connections": rows}
+
+        def api_blocked(self):
+            self._require_admin(False)
+            return {"blocked": [{"ip": ip, "seconds": seconds} for ip, seconds in app.dav_limiter.snapshot()]}
+
+        def api_unblock(self, ip):
+            self._require_admin(True)
+            import ipaddress
+            try:
+                ipaddress.ip_address(ip)
+            except ValueError:
+                raise ApiError(400, "That is not an address") from None
+            app.dav_limiter.success(ip)
+            log.info("address unblocked by the administrator: %s", ip)
+            return {"ok": True}
 
         def api_log(self):
             self._require_admin(False)
@@ -370,10 +399,10 @@ def make_handler(app: "App") -> type[BaseHTTPRequestHandler]:
     ROUTES: dict[tuple[str, str], Callable[..., Any]] = {
         ("GET", "/api/state"): Handler.api_state, ("POST", "/api/setup"): Handler.api_setup, ("POST", "/api/login"): Handler.api_login, ("POST", "/api/logout"): Handler.api_logout,
         ("POST", "/api/admin/password"): Handler.api_change_password, ("GET", "/api/users"): Handler.api_users, ("POST", "/api/users"): Handler.api_user_create,
-        ("GET", "/api/fs"): Handler.api_fs, ("GET", "/api/activity"): Handler.api_activity, ("GET", "/api/log"): Handler.api_log, ("GET", "/api/settings"): Handler.api_settings_get,
+        ("GET", "/api/fs"): Handler.api_fs, ("GET", "/api/blocked"): Handler.api_blocked, ("GET", "/api/activity"): Handler.api_activity, ("GET", "/api/log"): Handler.api_log, ("GET", "/api/settings"): Handler.api_settings_get,
         ("PUT", "/api/settings"): Handler.api_settings_put, ("POST", "/api/sftpgo/restart"): Handler.api_sftpgo_restart,
     }
     user = r"/api/users/([^/]{1,64})"
     PATTERNS = [("GET", re.compile(f"^{user}$"), Handler.api_user_get), ("PUT", re.compile(f"^{user}$"), Handler.api_user_update), ("DELETE", re.compile(f"^{user}$"), Handler.api_user_delete),
-                ("POST", re.compile(f"^{user}/password$"), Handler.api_user_password), ("GET", re.compile(f"^{user}/invite$"), Handler.api_user_invite)]
+                ("POST", re.compile(f"^{user}/password$"), Handler.api_user_password), ("DELETE", re.compile(r"^/api/blocked/([0-9a-fA-F:.]{2,45})$"), Handler.api_unblock), ("GET", re.compile(f"^{user}/invite$"), Handler.api_user_invite)]
     return Handler

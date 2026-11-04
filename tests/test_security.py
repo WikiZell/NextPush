@@ -93,6 +93,25 @@ class Lockout(unittest.TestCase):
         self.assertEqual(limiter.locked_for("a"), 0)
 
 
+class LimiterParameters(unittest.TestCase):
+    def test_custom_free_attempts_cap_and_snapshot(self) -> None:
+        now = [0.0]
+        limiter = LoginLimiter(clock=lambda: now[0], free_attempts=8, max_lock=600)
+        for _ in range(7):
+            limiter.failure("a")
+        self.assertEqual((limiter.locked_for("a"), limiter.snapshot()), (0, []))
+        limiter.failure("a")
+        self.assertEqual(limiter.snapshot(), [("a", 2)])
+        for _ in range(40):
+            now[0] += 700
+            limiter.failure("a")
+        self.assertLessEqual(limiter.locked_for("a"), 600, "the lock never exceeds the cap")
+        limiter.failure("b")
+        self.assertEqual([ip for ip, _ in limiter.snapshot()], ["a"], "only locked addresses are listed")
+        now[0] += 10_000
+        self.assertEqual(limiter.snapshot(), [])
+
+
 class ClientAddress(unittest.TestCase):
     TRUSTED = ["127.0.0.0/8", "192.168.0.0/16"]
 

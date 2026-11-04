@@ -282,6 +282,20 @@ class Hygiene(AdminCase):
         self.assertEqual(self.client.get("/api/fs?path=relative")[0], 400)
         self.assertEqual(self.client.get("/api/fs?path=" + str(self.app.data_dir))[0], 200)
 
+    def test_blocked_addresses_endpoints_are_protected_and_validated(self) -> None:
+        self.assertEqual(Client(self.app.admin_address[1]).get("/api/blocked")[0], 401)
+        self.assertEqual(Client(self.app.admin_address[1]).delete("/api/blocked/1.2.3.4", csrf=False)[0], 401)
+        self.assertEqual(self.client.delete("/api/blocked/abcd")[0], 400, "hex-looking junk that is not an address")
+        self.assertEqual(self.client.delete("/api/blocked/1.2.3.4", headers={"X-CSRF-Token": "wrong"}, csrf=False)[0], 403)
+        status, body, _ = self.client.get("/api/blocked")
+        self.assertEqual((status, body), (200, {"blocked": []}))
+        self.app.dav_limiter.failure("203.0.113.1")
+        for _ in range(9):
+            self.app.dav_limiter.failure("203.0.113.1")
+        self.assertEqual([b["ip"] for b in self.client.get("/api/blocked")[1]["blocked"]], ["203.0.113.1"])
+        self.assertEqual(self.client.delete("/api/blocked/203.0.113.1")[0], 200)
+        self.assertEqual(self.client.get("/api/blocked")[1], {"blocked": []})
+
     def test_the_settings_file_never_holds_the_admin_password(self) -> None:
         self.assertNotIn(PASSWORD, (self.app.data_dir / "nextpush.json").read_text(encoding="utf-8"))
 
