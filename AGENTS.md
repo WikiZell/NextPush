@@ -33,7 +33,7 @@ python3 -m nextpush --data-dir /tmp/np --admin-host 127.0.0.1     # run it
 ## Conventions
 
 - Python 3.10+ (`from __future__ import annotations`, `X | None`), type hints on public functions, no third-party runtime dependencies (update README and `requirements.txt` if you ever add one).
-- The GUI is plain HTML/CSS/JS in `nextpush/web/`: no build step, no inline scripts, escape everything with `esc()` before it goes into HTML.
+- The GUI is plain HTML/CSS/JS in `nextpush/web/`: no build step, no inline scripts **and no inline styles** (the CSP forbids both; use classes), escape everything with `esc()` before it goes into HTML, use `<dialog>` via `dialog()`, and keep every control labelled (axe-core must stay at 0 violations).
 - API calls return JSON; errors are `{"error": "message for the administrator"}` and never contain internals.
 - Tests use real components where it matters (real SFTPGo, real rclone through NextPull) and fakes only for the edge cases that cannot be produced reliably.
 

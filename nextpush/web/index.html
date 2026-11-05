@@ -3,59 +3,106 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light dark">
+<meta name="robots" content="noindex, nofollow">
 <title>NextPush</title>
+<link rel="icon" href="favicon.svg" type="image/svg+xml">
 <link rel="stylesheet" href="style.css">
+<script src="theme.js"></script>
 </head>
 <body>
-<div id="boot" class="center muted">Loading...</div>
+<a class="skip" href="#main">Skip to content</a>
 
-<section id="screen-setup" class="center" hidden>
-  <div class="card narrow stack">
-    <div class="brand big"><span class="mark">&#8679;</span>NextPush</div>
-    <h1>Welcome</h1>
-    <p class="muted">Let's set up your file server. It takes a minute.</p>
-    <label>Setup code<input id="su-token" autocomplete="off" placeholder="shown on the console where NextPush was started"><small>It is also in the file <span class="mono">setup-code.txt</span> in NextPush's data folder.</small></label>
-    <label>Server name <small>shown to the people you invite</small><input id="su-name" maxlength="60" placeholder="Home server"></label>
-    <label>Public address <small>optional now: what clients will use, for example https://dl.example.com</small><input id="su-url" placeholder="https://dl.example.com"></label>
-    <label>Choose an admin password <small>at least 10 characters</small><input id="su-pass" type="password" autocomplete="new-password"></label>
-    <label>Repeat the password<input id="su-pass2" type="password" autocomplete="new-password"></label>
-    <div id="su-error" class="notice bad" hidden></div>
-    <button class="btn" id="su-go">Finish setup</button>
-  </div>
-</section>
+<div id="boot" class="center" role="status">
+  <div class="spinner" aria-hidden="true"></div><p class="muted" id="boot-text">Loading...</p>
+</div>
 
-<section id="screen-login" class="center" hidden>
-  <div class="card narrow stack">
-    <div class="brand big"><span class="mark">&#8679;</span>NextPush</div>
-    <label>Admin password<input id="li-pass" type="password" autocomplete="current-password"></label>
-    <div id="li-error" class="notice bad" hidden></div>
-    <button class="btn" id="li-go">Sign in</button>
-  </div>
-</section>
+<main id="screen-setup" class="center" hidden>
+  <form class="card auth stack" id="setup-form" novalidate>
+    <div class="brand big"><img src="favicon.svg" alt="" width="40" height="40"><span>NextPush</span></div>
+    <div>
+      <h1>Welcome</h1>
+      <p class="muted">Set up your file server in a minute. You only do this once.</p>
+    </div>
+    <div class="field">
+      <label for="su-token">Setup code</label>
+      <input id="su-token" name="token" autocomplete="off" spellcheck="false" autocapitalize="off" required aria-describedby="su-token-hint">
+      <p class="hint" id="su-token-hint">Printed on the console where NextPush was started, and saved in <span class="mono">setup-code.txt</span> in its data folder.</p>
+    </div>
+    <div class="field">
+      <label for="su-name">Server name <span class="opt">optional</span></label>
+      <input id="su-name" name="server_name" maxlength="60" placeholder="Home server" autocomplete="off" aria-describedby="su-name-hint">
+      <p class="hint" id="su-name-hint">Shown to the people you invite.</p>
+    </div>
+    <div class="field">
+      <label for="su-url">Public address <span class="opt">optional now</span></label>
+      <input id="su-url" name="public_url" inputmode="url" autocomplete="off" spellcheck="false" autocapitalize="off" placeholder="https://dl.example.com" aria-describedby="su-url-hint">
+      <p class="hint" id="su-url-hint">The address of your reverse proxy. You can add it later in Settings.</p>
+    </div>
+    <div class="field">
+      <label for="su-pass">Admin password</label>
+      <div class="pw"><input id="su-pass" name="password" type="password" autocomplete="new-password" required minlength="10" aria-describedby="su-pass-hint"><button type="button" class="icon-btn" data-reveal="su-pass" aria-label="Show password" aria-pressed="false"></button></div>
+      <p class="hint" id="su-pass-hint">At least 10 characters. A few random words work well.</p>
+    </div>
+    <div class="field">
+      <label for="su-pass2">Repeat the password</label>
+      <input id="su-pass2" type="password" autocomplete="new-password" required>
+    </div>
+    <div id="su-error" class="notice bad" role="alert" hidden></div>
+    <button class="btn primary block" id="su-go" type="submit">Finish setup</button>
+  </form>
+</main>
+
+<main id="screen-login" class="center" hidden>
+  <form class="card auth stack" id="login-form" novalidate>
+    <div class="brand big"><img src="favicon.svg" alt="" width="40" height="40"><span>NextPush</span></div>
+    <div>
+      <h1>Sign in</h1>
+      <p class="muted" id="li-sub">Enter the admin password.</p>
+    </div>
+    <input type="text" name="username" value="admin" autocomplete="username" hidden>
+    <div class="field">
+      <label for="li-pass">Admin password</label>
+      <div class="pw"><input id="li-pass" name="password" type="password" autocomplete="current-password" required><button type="button" class="icon-btn" data-reveal="li-pass" aria-label="Show password" aria-pressed="false"></button></div>
+    </div>
+    <div id="li-error" class="notice bad" role="alert" hidden></div>
+    <button class="btn primary block" id="li-go" type="submit">Sign in</button>
+  </form>
+</main>
 
 <div id="app" hidden>
-  <header>
-    <div class="brand"><span class="mark">&#8679;</span>NextPush <small id="ver"></small></div>
-    <nav id="nav">
-      <button class="tab active" data-view="users">Users</button>
-      <button class="tab" data-view="activity">Activity</button>
-      <button class="tab" data-view="settings">Settings</button>
-      <button class="tab" data-view="log">Log</button>
-    </nav>
-    <div class="row"><span id="status" class="badge">...</span><button class="btn ghost small" id="logout">Sign out</button></div>
+  <header class="topbar">
+    <button class="icon-btn menu-btn" id="menu-btn" type="button" aria-label="Open menu" aria-expanded="false" aria-controls="sidebar"></button>
+    <div class="brand"><img src="favicon.svg" alt="" width="28" height="28"><span>NextPush</span><small id="ver"></small></div>
+    <div class="spacer"></div>
+    <span id="status" class="badge" role="status">...</span>
+    <button class="icon-btn" id="theme-btn" type="button" aria-label="Switch theme"></button>
+    <button class="btn ghost small" id="logout" type="button">Sign out</button>
   </header>
-  <main>
-    <div id="banner"></div>
-    <section id="view-users" class="view"></section>
-    <section id="view-activity" class="view" hidden></section>
-    <section id="view-settings" class="view" hidden></section>
-    <section id="view-log" class="view" hidden></section>
-  </main>
-  <footer class="muted">NextPush is made by Ren&eacute; Girardi and runs <a href="https://github.com/drakkan/sftpgo" target="_blank" rel="noopener">SFTPGo</a> (AGPL-3.0) as a separate program.</footer>
+  <div class="shell">
+    <nav id="sidebar" class="sidebar" aria-label="Main">
+      <a href="#/overview" data-view="overview"><span class="ico" data-ico="home"></span>Overview</a>
+      <a href="#/users" data-view="users"><span class="ico" data-ico="users"></span>Users</a>
+      <a href="#/activity" data-view="activity"><span class="ico" data-ico="pulse"></span>Activity</a>
+      <a href="#/settings" data-view="settings"><span class="ico" data-ico="gear"></span>Settings</a>
+      <a href="#/log" data-view="log"><span class="ico" data-ico="list"></span>Log</a>
+      <button type="button" class="btn only-mobile side-out" id="logout-m">Sign out</button>
+    </nav>
+    <div class="scrim" id="scrim" hidden></div>
+    <main id="main" class="content" tabindex="-1">
+      <div id="banner"></div>
+      <section id="view-overview" class="view" aria-labelledby="h-overview" hidden></section>
+      <section id="view-users" class="view" aria-labelledby="h-users" hidden></section>
+      <section id="view-activity" class="view" aria-labelledby="h-activity" hidden></section>
+      <section id="view-settings" class="view" aria-labelledby="h-settings" hidden></section>
+      <section id="view-log" class="view" aria-labelledby="h-log" hidden></section>
+      <footer class="muted foot">NextPush is made by Ren&eacute; Girardi and runs <a href="https://github.com/drakkan/sftpgo" target="_blank" rel="noopener noreferrer">SFTPGo</a> (AGPL-3.0) as a separate program.</footer>
+    </main>
+  </div>
 </div>
 
 <div id="modals"></div>
-<div class="toasts" id="toasts"></div>
+<div class="toasts" id="toasts" popover="manual" role="status" aria-live="polite" aria-atomic="false"></div>
 <script src="app.js"></script>
 </body>
 </html>

@@ -19,7 +19,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Callable
 
-from . import __version__, fsbrowse
+from . import __version__, checks, fsbrowse
 from .config import ACCESS_KEY_HEADER
 from .security import check_admin_password, client_ip, constant_eq, hash_password, verify_password
 from .sftpgo import SftpgoApiError, SftpgoError
@@ -32,11 +32,12 @@ log = logging.getLogger("nextpush.admin")
 COOKIE = "nextpush_session"
 WEB_DIR = Path(__file__).resolve().parent / "web"
 STATIC = {"/": ("index.html", "text/html; charset=utf-8"), "/index.html": ("index.html", "text/html; charset=utf-8"), "/app.js": ("app.js", "text/javascript; charset=utf-8"),
-          "/style.css": ("style.css", "text/css; charset=utf-8")}
+          "/style.css": ("style.css", "text/css; charset=utf-8"), "/favicon.svg": ("favicon.svg", "image/svg+xml"),
+          "/theme.js": ("theme.js", "text/javascript; charset=utf-8")}
 MAX_JSON = 64 * 1024
 SECURITY_HEADERS = {
     "X-Content-Type-Options": "nosniff", "X-Frame-Options": "DENY", "Referrer-Policy": "no-referrer", "Cache-Control": "no-store",
-    "Content-Security-Policy": "default-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; frame-ancestors 'none'; base-uri 'none'; form-action 'self'",
+    "Content-Security-Policy": "default-src 'self'; style-src 'self'; script-src 'self'; img-src 'self' data:; connect-src 'self'; object-src 'none'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'",
 }
 
 
@@ -391,6 +392,12 @@ def make_handler(app: "App") -> type[BaseHTTPRequestHandler]:
             app.settings.update(**changes)
             return self.api_settings_get()
 
+        def api_check_public(self):
+            """Ask the public address (from this server) whether it reaches NextPush: the one question every new installation has."""
+            self._require_admin(True)
+            key = app.settings.get("access_key")
+            return checks.check_public(app.settings.get("public_url"), key["header"] if key["enabled"] else "", key["value"] if key["enabled"] else "", app.settings.get("server_name"))
+
         def api_sftpgo_restart(self):
             self._require_admin(True)
             app.supervisor.restart()
@@ -400,7 +407,7 @@ def make_handler(app: "App") -> type[BaseHTTPRequestHandler]:
         ("GET", "/api/state"): Handler.api_state, ("POST", "/api/setup"): Handler.api_setup, ("POST", "/api/login"): Handler.api_login, ("POST", "/api/logout"): Handler.api_logout,
         ("POST", "/api/admin/password"): Handler.api_change_password, ("GET", "/api/users"): Handler.api_users, ("POST", "/api/users"): Handler.api_user_create,
         ("GET", "/api/fs"): Handler.api_fs, ("GET", "/api/blocked"): Handler.api_blocked, ("GET", "/api/activity"): Handler.api_activity, ("GET", "/api/log"): Handler.api_log, ("GET", "/api/settings"): Handler.api_settings_get,
-        ("PUT", "/api/settings"): Handler.api_settings_put, ("POST", "/api/sftpgo/restart"): Handler.api_sftpgo_restart,
+        ("PUT", "/api/settings"): Handler.api_settings_put, ("POST", "/api/sftpgo/restart"): Handler.api_sftpgo_restart, ("POST", "/api/check-public"): Handler.api_check_public,
     }
     user = r"/api/users/([^/]{1,64})"
     PATTERNS = [("GET", re.compile(f"^{user}$"), Handler.api_user_get), ("PUT", re.compile(f"^{user}$"), Handler.api_user_update), ("DELETE", re.compile(f"^{user}$"), Handler.api_user_delete),

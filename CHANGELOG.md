@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.2.0 - new admin interface
+
+- **Redesigned web GUI**: sidebar navigation with an **Overview** page (status, counts, and a "Get started" checklist), light and dark theme (follows the system, switchable), phone-friendly layout (menu, stacked tables),
+  real dialogs (focus is kept inside, Esc closes), inline form validation with clear messages, search in the user list, relative times, copy buttons that work on plain-http local addresses, toasts that stay visible above dialogs, a loading and
+  error state for every page, addresses in the URL (`#/users`) so Back and reload work, and a "lost contact" banner if NextPush stops answering.
+- **Check the connection** (Overview and Settings): NextPush asks your public address from the server itself, with the access key and real certificate checking, and explains what it found (DNS, certificate, proxy pointing at the wrong place,
+  a different NextPush answering, plain http). New API call `POST /api/check-public`; it never returns the key.
+- **Accessibility**: labelled fields, descriptions and error messages tied to inputs, visible keyboard focus, skip link, reduced-motion and high-contrast support. Checked with axe-core (0 violations on every page, both themes, all dialogs).
+- **Stricter content-security-policy**: no inline styles or scripts are allowed any more (`style-src 'self'`, `script-src 'self'`).
+- Bugs found while reviewing the old GUI and fixed: closed dialogs could pile up with duplicate ids; the page polled and redrew while you were typing; a view that finished loading late could overwrite the one you had switched to;
+  copy failed silently when the clipboard was not allowed.
+
 ## 0.1.1 - login protection fixed
 
 - **Problem found in real use:** SFTPGo's own login protection ("defender") raised a ban by 50 % on every further attempt, so a client that kept retrying (a saved password that was wrong for a while) went from a
