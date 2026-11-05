@@ -23,6 +23,21 @@ class StubApp:
         self.public_dropped = 0
         self.last_refusal_log: dict[str, float] = {}
         self.dav_limiter = LoginLimiter(free_attempts=8, max_lock=600)
+        self._users = StubUsers()
+
+    def users(self) -> "StubUsers":   # a method, like App.users
+        return self._users
+
+
+class StubUsers:
+    """What UserService.get returns: names and modes (the real one also holds real paths, which must never be sent)."""
+
+    def get(self, username: str) -> dict:
+        if username == "broken":
+            raise RuntimeError("SFTPGo is restarting")
+        folders = {"bob": [{"name": "Incoming", "path": "/srv/secret/media", "mode": "pull"}, {"name": "Anime", "path": "/srv/secret/anime", "mode": "read"}],
+                   "viewer": [{"name": "Films", "path": "/srv/secret/films", "mode": "read"}]}
+        return {"username": username, "folders": folders.get(username, [])}
 
 
 class ProxyCase(TempCase):
@@ -82,7 +97,7 @@ class Discovery(ProxyCase):
         import json
         document = json.loads(body)
         self.assertEqual(status, 200)
-        self.assertEqual(document, {"nextpush": 1, "name": "Test server", "version": document["version"], "dav": "/dav", "auth": "basic"})
+        self.assertEqual(document, {"nextpush": 1, "name": "Test server", "version": document["version"], "dav": "/dav", "auth": "basic", "me": "/.well-known/nextpush/me"})
         self.assertNotIn("server", {k.lower() for k in headers}, "no software banner")
         self.assertEqual(headers.get("Cache-Control"), "no-store")
 
@@ -92,6 +107,60 @@ class Discovery(ProxyCase):
             self.assertEqual(status, 404, path)
             self.assertNotIn(b"nextpush", body.lower())
         self.assertEqual(self.upstream.requests, [])
+
+
+class WhoAmI(ProxyCase):
+    """/.well-known/nextpush/me: the folders of the signed-in user and whether each allows deleting after the copy. Names and modes only."""
+
+    def setUp(self) -> None:
+        super().setUp()
+        self.upstream.routes[("PROPFIND", "/dav/")] = (207, {}, b"<multistatus/>")
+
+    def me(self, user="bob", password="right", **kw):
+        return self.call("GET", "/.well-known/nextpush/me", user=user, password=password, **kw)
+
+    def test_a_signed_in_user_sees_their_folders_and_modes_but_never_real_paths(self) -> None:
+        import json
+        status, headers, body = self.me()
+        self.assertEqual(status, 200)
+        document = json.loads(body)
+        self.assertEqual(document, {"nextpush": 1, "user": "bob", "folders": [{"name": "Incoming", "mode": "pull"}, {"name": "Anime", "mode": "read"}], "can_delete": True})
+        self.assertNotIn(b"secret", body)
+        self.assertEqual(headers.get("Cache-Control"), "no-store")
+        self.assertEqual(json.loads(self.me(user="viewer")[2])["can_delete"], False)
+
+    def test_the_login_is_checked_by_the_file_service_with_the_callers_own_credentials(self) -> None:
+        self.me(headers={"X-Forwarded-For": "198.51.100.4"})
+        request = self.upstream.requests[-1]
+        self.assertEqual((request["method"], request["path"], request["headers"]["depth"]), ("PROPFIND", "/dav/", "0"))
+        self.assertTrue(request["headers"]["authorization"].startswith("Basic "))
+        self.assertNotIn(KEY[0].lower(), request["headers"], "the access key never reaches SFTPGo")
+
+    def test_without_a_login_or_with_a_wrong_one_nothing_is_revealed(self) -> None:
+        self.assertEqual(self.call("GET", "/.well-known/nextpush/me")[0], 401)
+        self.upstream.routes[("PROPFIND", "/dav/")] = (401, {}, b"bad")
+        status, _, body = self.me(password="wrong")
+        self.assertEqual(status, 401)
+        self.assertNotIn(b"folders", body)
+
+    def test_wrong_passwords_here_count_toward_the_same_lock_out(self) -> None:
+        self.upstream.routes[("PROPFIND", "/dav/")] = (401, {}, b"bad")
+        self.assertEqual([self.me(password="x", headers={"X-Forwarded-For": "203.0.113.20"})[0] for _ in range(8)], [401] * 8)
+        self.assertEqual(self.me(password="x", headers={"X-Forwarded-For": "203.0.113.20"})[0], 429)
+        self.assertEqual(self.call("PROPFIND", "/dav/", user="bob", password="x", headers={"X-Forwarded-For": "203.0.113.20"})[0], 429, "the WebDAV path is locked too")
+
+    def test_the_key_gate_and_the_method_filter_apply(self) -> None:
+        self.assertTrue(self.dropped("GET", "/.well-known/nextpush/me", key=None, user="bob", password="right"))
+        self.assertTrue(self.dropped("POST", "/.well-known/nextpush/me", user="bob", password="right"))
+
+    def test_a_folder_list_that_cannot_be_read_is_unknown_not_guessed(self) -> None:
+        import json
+        document = json.loads(self.me(user="broken")[2])
+        self.assertEqual((document["folders"], document["can_delete"]), ([], None))
+
+    def test_a_dead_file_service_is_a_clean_502(self) -> None:
+        self.upstream.stop()
+        self.assertEqual(self.me()[0], 502)
 
 
 class Proxying(ProxyCase):

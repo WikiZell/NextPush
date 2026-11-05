@@ -41,6 +41,6 @@ Each NextPush user is an SFTPGo user whose **only protocol is WebDAV**, whose ho
 
 1. The reverse proxy forwards to `:8096` (plain http on your network).
 2. `PublicServer.parse_request` runs the **gate** before anything else: access key header (constant-time compare), then allowed methods (`GET HEAD OPTIONS PROPFIND DELETE`). A failure closes the connection without a byte.
-3. `/.well-known/nextpush` answers the discovery document; `/dav/...` is proxied: hop-by-hop headers dropped, the key and forwarding headers removed, `X-Forwarded-For` set to the real client address
+3. `/.well-known/nextpush` answers the discovery document; `/.well-known/nextpush/me` tells a signed-in user the names and modes of their folders (login checked by SFTPGo, counted by the same lock-out, never real paths); `/dav/...` is proxied: hop-by-hop headers dropped, the key and forwarding headers removed, `X-Forwarded-For` set to the real client address
    (believed from the proxy only when it is a trusted proxy; the right-most untrusted entry wins), the body read, the answer streamed in 256 KB chunks. If SFTPGo ends early, the client connection is cut so the download fails fast.
 4. SFTPGo authenticates the user, applies the virtual-folder permissions and its defender (it sees the real client address).

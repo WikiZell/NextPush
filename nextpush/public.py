@@ -3,6 +3,8 @@
 * Every request must carry the access key header (when it is enabled) and use a read/list/delete method; anything else gets **no answer at all** (the connection is
   closed), so a stranger cannot even tell what is listening.
 * ``/.well-known/nextpush`` returns a small discovery document (name, WebDAV path, sign-in kind). No user names, no folder names.
+* ``/.well-known/nextpush/me`` tells a signed-in user which of their folders are download-only and which also allow deleting after the copy (names and modes only,
+  never real paths), so NextPull can explain "Move" before the user tries it. The login is checked by SFTPGo itself and counts toward the same lock-out as every other login.
 * ``/dav/...`` is proxied to SFTPGo's WebDAV service on loopback, streaming (never buffering a whole file), with ``Range`` passed through.
 """
 from __future__ import annotations
@@ -28,6 +30,7 @@ if TYPE_CHECKING:
 log = logging.getLogger("nextpush.public")
 ALLOWED_METHODS = {"GET", "HEAD", "OPTIONS", "PROPFIND", "DELETE"}
 HOP_BY_HOP = {"connection", "keep-alive", "proxy-authenticate", "proxy-authorization", "te", "trailers", "transfer-encoding", "upgrade"}
+ME_PATH = "/.well-known/nextpush/me"
 STRIP_REQUEST = HOP_BY_HOP | {"host", "x-forwarded-for", "x-real-ip", "forwarded", "x-forwarded-host"}
 CHUNK = 256 * 1024
 MAX_BODY = 1_000_000
@@ -142,12 +145,62 @@ def make_handler(app: "App") -> type[BaseHTTPRequestHandler]:
                 return
             path = urllib.parse.urlsplit(self.path).path
             if path == "/.well-known/nextpush" and self.command in ("GET", "HEAD"):
-                return self._json(200, {"nextpush": 1, "name": app.settings.get("server_name"), "version": __version__, "dav": DAV_PREFIX, "auth": "basic"})
+                return self._json(200, {"nextpush": 1, "name": app.settings.get("server_name"), "version": __version__, "dav": DAV_PREFIX, "auth": "basic", "me": ME_PATH})
+            if path == ME_PATH and self.command == "GET":
+                return self._me()
             if path == DAV_PREFIX or path.startswith(DAV_PREFIX + "/"):
                 return self._proxy(body)
             self._json(404, {"error": "not found"}, close=True)
 
         do_GET = do_HEAD = do_OPTIONS = do_PROPFIND = do_DELETE = _handle
+
+        def _locked_reply(self, ip: str, wait: int) -> None:
+            self._note_locked(ip, wait)
+            self.send_response(429)
+            payload = json.dumps({"error": f"Too many wrong passwords from this address. Try again in {wait} seconds."}).encode()
+            for name, value in (("Content-Type", "application/json"), ("Content-Length", str(len(payload))), ("Retry-After", str(wait)), ("Connection", "close")):
+                self.send_header(name, value)
+            self.end_headers()
+            self.wfile.write(payload)
+            self.close_connection = True
+
+        def _me(self) -> None:
+            """Who am I and what may I do? SFTPGo checks the password (a PROPFIND on the share root with the caller's own login); only then are the user's folder
+            names and modes returned. Wrong passwords are counted and locked out exactly like on the WebDAV path."""
+            header = self.headers.get("Authorization")
+            username = basic_username(header)
+            if username is None:
+                return self._json(401, {"error": "sign in with your NextPush user name and password"})
+            tracked = username not in app.settings.get("no_block_users")
+            ip = self._ip()
+            if tracked:
+                wait = app.dav_limiter.locked_for(ip)
+                if wait:
+                    return self._locked_reply(ip, wait)
+            upstream = http.client.HTTPConnection("127.0.0.1", app.settings.get("dav_port"), timeout=30)
+            try:
+                try:
+                    upstream.request("PROPFIND", DAV_PREFIX + "/", headers={"Authorization": header, "Depth": "0", "Content-Length": "0", "Host": f"127.0.0.1:{app.settings.get('dav_port')}", "X-Forwarded-For": ip})
+                    response = upstream.getresponse()
+                    response.read()
+                except OSError:
+                    return self._json(502, {"error": "the file service is not available"}, close=True)
+            finally:
+                upstream.close()
+            self._note_refusal(response.status)
+            if tracked:
+                if response.status == 401:
+                    app.dav_limiter.failure(ip)
+                elif response.status < 400:
+                    app.dav_limiter.success(ip)
+            if response.status >= 400:
+                return self._json(401 if response.status == 401 else 403, {"error": "the login was not accepted"})
+            try:
+                folders = [{"name": item["name"], "mode": item["mode"]} for item in app.users().get(username)["folders"]]
+            except Exception:   # the login is fine but the folder list could not be read: say "unknown" instead of guessing
+                log.warning("could not read the folders of %s for /me", username, exc_info=True)
+                return self._json(200, {"nextpush": 1, "user": username, "folders": [], "can_delete": None})
+            return self._json(200, {"nextpush": 1, "user": username, "folders": folders, "can_delete": any(item["mode"] == "pull" for item in folders)})
 
         def _proxy(self, body: bytes) -> None:
             body = body or None
@@ -157,15 +210,7 @@ def make_handler(app: "App") -> type[BaseHTTPRequestHandler]:
             if tracked:
                 wait = app.dav_limiter.locked_for(ip)
                 if wait:
-                    self._note_locked(ip, wait)
-                    self.send_response(429)
-                    payload = json.dumps({"error": f"Too many wrong passwords from this address. Try again in {wait} seconds."}).encode()
-                    for name, value in (("Content-Type", "application/json"), ("Content-Length", str(len(payload))), ("Retry-After", str(wait)), ("Connection", "close")):
-                        self.send_header(name, value)
-                    self.end_headers()
-                    self.wfile.write(payload)
-                    self.close_connection = True
-                    return
+                    return self._locked_reply(ip, wait)
             headers = {k: v for k, v in self.headers.items() if k.lower() not in STRIP_REQUEST and k.lower() != app.settings.get("access_key")["header"].lower()}
             headers["Host"] = f"127.0.0.1:{app.settings.get('dav_port')}"
             headers["X-Forwarded-For"] = self._ip()

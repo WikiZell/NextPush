@@ -96,6 +96,15 @@ class NextPullAgainstNextPush(TempCase):
         found = connections.discover(self.public_url, timeout=5)
         self.assertEqual((found["ok"], found["type"], found["product"], found["name"], found["server"]), (True, "sftpgo", "NextPush", "Home server", self.public_url + "/dav"))
 
+    def test_nextpull_learns_which_folders_may_be_moved_and_which_are_download_only(self) -> None:
+        connections, *_ = NP
+        bob = connections.make_session(self.connection("bob")).nextpush_me()
+        self.assertEqual(bob, {"folders": {"Films": "pull"}, "can_delete": True})
+        viewer = connections.make_session(self.connection("viewer")).nextpush_me()
+        self.assertEqual(viewer, {"folders": {"Films": "read"}, "can_delete": False})
+        self.assertIsNone(connections.make_session(self.connection("bob", password="wrong password!")).nextpush_me(), "a wrong password reveals nothing")
+        self.assertIsNone(connections.make_session(self.connection("bob", header_value="not-the-key")).nextpush_me(), "no access key, no answer")
+
     def run_nextpull(self, name: str, mode: str):
         _, _, runner, store = NP
         history = store.HistoryDb(None)

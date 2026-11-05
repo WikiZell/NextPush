@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.3.0 - the client can ask what an account may do
+
+- **`GET /.well-known/nextpush/me`** (public listener): a signed-in user gets the names and modes (`pull` = download and delete after copy, `read` = download only) of their own folders and a `can_delete` flag, so
+  NextPull can switch **Move** off, with an explanation, for a download-only folder *before* a download starts, instead of finishing the download and then failing to delete. The password is checked by SFTPGo itself with the
+  caller's own login; wrong passwords count toward the same lock-out as on the WebDAV path; the access-key gate and the method filter apply; real paths are never returned. The discovery document now announces it (`"me"`).
+- Compatible with NextPull 0.4.0 (single-file *Get now*, Move/Download choice, pause, redesigned dashboard). Older NextPull versions simply never call it.
+- Tests: unit tests for the new endpoint (login check, lock-out, key gate, unknown state, dead upstream) and a real-chain test with the NextPull client for a `pull` and a `read` user.
+- Bug found by the real-chain test and fixed before release: a unit-test stub made `app.users` look like an attribute while the real `App.users` is a method.
+
 ## 0.2.0 - new admin interface
 
 - **Redesigned web GUI**: sidebar navigation with an **Overview** page (status, counts, and a "Get started" checklist), light and dark theme (follows the system, switchable), phone-friendly layout (menu, stacked tables),
